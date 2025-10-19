@@ -1,0 +1,13 @@
+# 환경 관련
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+env/
+venv/
+.ipynb_checkpoints/
+
+# 민감 정보
+credentials.json
+.env
