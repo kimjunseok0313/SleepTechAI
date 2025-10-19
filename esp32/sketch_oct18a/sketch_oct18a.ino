@@ -1,6 +1,7 @@
 #include <WiFiManager.h>
 #include <WebServer.h>
 #include <Preferences.h>
+#include <HTTPClient.h>
 
 WebServer server(80);
 Preferences prefs;
@@ -93,7 +94,6 @@ void handleSave() {
   float goal = server.arg("goal").toFloat();
   int satisfaction = server.arg("satisfaction").toInt();
 
-  // 직접 설정 모드일 경우 추가 데이터
   String onTime = server.arg("onTime");
   String offTime = server.arg("offTime");
   String colorMode = server.arg("colorMode");
@@ -116,6 +116,37 @@ void handleSave() {
   }
   prefs.end();
 
+  // ========== Flask 서버로 데이터 전송 ==========
+  HTTPClient http;
+http.begin("http://10.92.168.198:5000/save_pattern"); // Flask IP
+  http.addHeader("Content-Type", "application/json");
+
+  String json = "{";
+  json += "\"mode\":\"" + mode + "\",";
+  json += "\"wake\":\"" + wake + "\",";
+  json += "\"sleep\":\"" + sleep + "\",";
+  json += "\"weekday\":\"" + weekday + "\",";
+  json += "\"weekend\":\"" + weekend + "\",";
+  json += "\"goal\":" + String(goal) + ",";
+  json += "\"satisfaction\":" + String(satisfaction);
+  if (mode == "manual") {
+    json += ",\"on\":\"" + onTime + "\"";
+    json += ",\"off\":\"" + offTime + "\"";
+    json += ",\"color\":\"" + colorMode + "\"";
+    json += ",\"bright\":" + String(brightness);
+  }
+  json += "}";
+
+  int httpResponseCode = http.POST(json);
+  if (httpResponseCode > 0) {
+    String response = http.getString();
+    Serial.println("📨 서버 응답: " + response);
+  } else {
+    Serial.printf("❌ 전송 실패. 코드: %d\n", httpResponseCode);
+  }
+  http.end();
+
+  // 결과 페이지
   String msg = "<html><body><h3>✅ 설정이 저장되었습니다.</h3>";
   if (mode == "ai")
     msg += "<p>AI 추천 모드가 선택되었습니다. 나중에 AI 분석 결과가 적용됩니다.</p>";
@@ -125,13 +156,7 @@ void handleSave() {
 
   server.send(200, "text/html; charset=utf-8", msg);
 
-  // 디버그 출력
-  Serial.printf("📋 mode:%s wake:%s sleep:%s goal:%.1f 만족도:%d\n",
-                mode.c_str(), wake.c_str(), sleep.c_str(), goal, satisfaction);
-  if (mode == "manual") {
-    Serial.printf("   ⏰ on:%s off:%s color:%s bright:%d\n",
-                  onTime.c_str(), offTime.c_str(), colorMode.c_str(), brightness);
-  }
+  Serial.println("📤 Flask 서버로 데이터 전송 완료!");
 }
 
 void setup() {

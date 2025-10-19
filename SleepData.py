@@ -1,14 +1,15 @@
-from flask import Flask, jsonify
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from flask import Flask, jsonify, request
 import pandas as pd
 import os
+import datetime
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 app = Flask(__name__)
 
-# ========================
-# 구글 시트 설정
-# ========================
+# ==============================
+# Google Sheets 설정 (선택적)
+# ==============================
 SCOPE = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive"
@@ -16,43 +17,68 @@ SCOPE = [
 CREDS_FILE = "credentials.json"
 SHEET_ID = "1s5BKkultYwSUrEQxOajsWZvf64g0538kMKdii0WivTY"
 
-# ========================
-# 구글 시트에서 데이터 읽기
-# ========================
-def get_sheet_data():
-    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDS_FILE, SCOPE)
-    client = gspread.authorize(creds)
-    sheet = client.open_by_key(SHEET_ID).sheet1
-    data = sheet.get_all_records()
-    return data
+# ==============================
+# CSV 파일 설정
+# ==============================
+DATA_FILE = "user_patterns.csv"
+SLEEP_FILE = "sleep_data.csv"
 
-# ========================
-# Flask 라우트
-# ========================
+
+# ==============================
+# /analyze - Google Sheet 읽고 CSV로 저장
+# ==============================
 @app.route("/analyze", methods=["GET"])
 def analyze():
     try:
-        data = get_sheet_data()
-        if not data:
-            return jsonify({"error": "No data in sheet"}), 404
+        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDS_FILE, SCOPE)
+        client = gspread.authorize(creds)
+        sheet = client.open_by_key(SHEET_ID).sheet1
 
-        # pandas DataFrame 변환 후 CSV 저장
+        data = sheet.get_all_records()
+        if not data:
+            return jsonify({"error": "No data found"}), 404
+
         df = pd.DataFrame(data)
-        csv_path = os.path.join(os.getcwd(), "sleep_data.csv")
-        df.to_csv(csv_path, index=False, encoding="utf-8-sig")
+        df.to_csv(SLEEP_FILE, index=False, encoding="utf-8-sig")
 
         return jsonify({
-            "message": "Data fetched and saved as CSV",
+            "message": "Sleep data fetched and saved",
             "rows": len(data),
-            "latest": data[-1],
-            "csv_path": csv_path
+            "latest": data[-1]
         })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# ========================
+
+# ==============================
+# /save_pattern - ESP32에서 전송된 생활 패턴 저장
+# ==============================
+@app.route("/save_pattern", methods=["POST"])
+def save_pattern():
+    try:
+        data = request.get_json()
+
+        if not data:
+            return jsonify({"error": "No JSON data received"}), 400
+
+        data["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        df = pd.DataFrame([data])
+        if not os.path.exists(DATA_FILE):
+            df.to_csv(DATA_FILE, index=False, encoding="utf-8-sig")
+        else:
+            df.to_csv(DATA_FILE, mode="a", header=False, index=False, encoding="utf-8-sig")
+
+        print(f"✅ 데이터 저장됨: {data}")
+        return jsonify({"message": "Data received and saved", "data": data})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ==============================
 # 서버 실행
-# ========================
+# ==============================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
