@@ -118,7 +118,7 @@ void handleSave() {
 
   // ========== Flask 서버로 데이터 전송 ==========
   HTTPClient http;
-http.begin("http://10.92.168.198:5000/save_pattern"); // Flask IP
+http.begin("http://172.21.88.117:5000/save_pattern");
   http.addHeader("Content-Type", "application/json");
 
   String json = "{";
@@ -168,7 +168,7 @@ void setup() {
   server.on("/save", handleSave);
   server.begin();
 
-  Serial.println("🌐 Lifestyle Config Server Ready");
+  Serial.println(" Lifestyle Config Server Ready");
 }
 
 void loop() {
