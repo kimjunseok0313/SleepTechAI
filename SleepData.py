@@ -88,7 +88,7 @@ def save_pattern():
         # ==============================
         creds = ServiceAccountCredentials.from_json_keyfile_name(CREDS_FILE, SCOPE)
         client = gspread.authorize(creds)
-        sheet = client.open_by_key(SHEET_ID).sheet1
+        sheet = client.open_by_key(SHEET_ID).sheet2
 
         # key 순서에 맞게 정렬해서 append
         headers = list(data.keys())

@@ -118,7 +118,7 @@ void handleSave() {
 
   // ========== Flask 서버로 데이터 전송 ==========
   HTTPClient http;
-http.begin("http://172.21.88.117:5000/save_pattern");
+http.begin("https://sleeptech-server.onrender.com/save_pattern");
   http.addHeader("Content-Type", "application/json");
 
   String json = "{";
