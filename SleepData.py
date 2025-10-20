@@ -12,7 +12,7 @@ SCOPE = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive"
 ]
-CREDS_FILE = "credentials.json"  
+CREDS_FILE = "/etc/secrets/credentials.json"
 SHEET_ID = "1s5BKkultYwSUrEQxOajsWZvf64g0538kMKdii0WivTY"
 
 #  CSV 파일 설정
