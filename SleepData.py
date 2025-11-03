@@ -27,6 +27,25 @@ DATA_FILE = "user_patterns.csv"
 SLEEP_FILE = "sleep_data.csv"
 
 
+
+@app.route("/save_init", methods=["POST"])
+def save_init():
+    try:
+        data = request.get_json(force=True)
+        data["timestamp"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Google Sheets에 저장
+        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDS_FILE, SCOPE)
+        client = gspread.authorize(creds)
+        sheet = client.open_by_key(SHEET_ID).worksheet("InitData")  # "InitData" 시트 탭 사용
+        sheet.append_row([data.get(k, "") for k in data.keys()])
+
+        return jsonify({"status": "success", "message": "Init data saved"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+
 # ==============================
 # 📊 /analyze - Google Sheets → CSV 저장
 # ==============================
