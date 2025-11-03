@@ -1,10 +1,38 @@
+#include <Arduino.h>
 #include <WiFiManager.h>
 #include <WebServer.h>
 #include <Preferences.h>
 #include <HTTPClient.h>
+#include <ArduinoJson.h>
+
 
 WebServer server(80);
 Preferences prefs;
+
+// =========================
+// PWM 설정 (LED 제어용)
+// =========================
+const int PIN_WARM = 25;   // 2700K 채널
+const int PIN_COOL = 26;   // 6500K 채널
+const int CH_WARM = 0;
+const int CH_COOL = 1;
+const int PWM_FREQ = 5000;
+const int PWM_RES = 8;     // 0~255 PWM 해상도
+
+void setupPWM() {
+  ledcSetup(CH_WARM, PWM_FREQ, PWM_RES);
+  ledcSetup(CH_COOL, PWM_FREQ, PWM_RES);
+  ledcAttachPin(PIN_WARM, CH_WARM);
+  ledcAttachPin(PIN_COOL, CH_COOL);
+}
+
+void applyLight(int warm_pwm, int cool_pwm) {
+  warm_pwm = constrain(warm_pwm, 0, 255);
+  cool_pwm = constrain(cool_pwm, 0, 255);
+  ledcWrite(CH_WARM, warm_pwm);
+  ledcWrite(CH_COOL, cool_pwm);
+  Serial.printf("💡 조명 적용 → Warm:%d  Cool:%d\n", warm_pwm, cool_pwm);
+}
 
 // =========================
 // HTML 페이지 (초기 설정)
@@ -80,36 +108,11 @@ String mainPage = R"rawliteral(
         <label>취침 시간:</label><br>
         <input type='time' name='sleep'><br><br>
 
-        <label>주중 생활 패턴:</label><br>
-        <textarea name='weekday' rows='3'></textarea><br><br>
-
-        <label>주말 생활 패턴:</label><br>
-        <textarea name='weekend' rows='3'></textarea><br><br>
-
         <label>수면 목표(시간):</label><br>
         <input type='number' name='goal' min='4' max='10' step='0.5' value='7'><br><br>
 
         <label>현재 수면 만족도 (1~10):</label><br>
         <input type='number' name='satisfaction' min='1' max='10' value='5'><br>
-      </div>
-
-      <div class='section'>
-        <h3>모드 선택</h3>
-        <input type='radio' name='mode' value='ai' checked onclick='toggleMode("ai")'> AI 추천 모드<br>
-        <input type='radio' name='mode' value='manual' onclick='toggleMode("manual")'> 직접 설정 모드
-      </div>
-
-      <div id='manualSection' class='section hidden'>
-        <h3>직접 조명 설정</h3>
-        <label>켜지는 시간:</label><br>
-        <input type='time' name='onTime'><br><br>
-        <label>꺼지는 시간:</label><br>
-        <input type='time' name='offTime'><br><br>
-        <label>색상 선택:</label><br>
-        <input type='radio' name='colorMode' value='warm'> 따뜻한 빛 (2700K)<br>
-        <input type='radio' name='colorMode' value='cool'> 차가운 빛 (6500K)<br><br>
-        <label>밝기 단계 (1~10):</label><br>
-        <input type='number' name='brightness' min='1' max='10' value='5'><br>
       </div>
 
       <div class='section'>
@@ -141,7 +144,6 @@ String mainPage = R"rawliteral(
 // 함수들
 // =========================
 void handleRoot() {
-  // 초기 설정이 되어있는지 확인
   prefs.begin("init", true);
   bool isInitDone = prefs.getBool("done", false);
   prefs.end();
@@ -180,32 +182,45 @@ void handleSaveInit() {
 }
 
 void handleSave() {
-  String mode = server.arg("mode");
   String wake = server.arg("wake");
   String sleep = server.arg("sleep");
   float goal = server.arg("goal").toFloat();
   int satisfaction = server.arg("satisfaction").toInt();
-  String weekday = server.arg("weekday");
-  String weekend = server.arg("weekend");
-
   String morningFeel = server.arg("morningFeel");
   int wakeCount = server.arg("wakeCount").toInt();
   int quality = server.arg("quality").toInt();
 
-  // Flask 전송
+  // Flask로 전송
   HTTPClient http;
   http.begin("https://sleeptech-server.onrender.com/save_pattern");
   http.addHeader("Content-Type", "application/json");
 
-  String json = "{\"mode\":\"" + mode + "\",\"wake\":\"" + wake + "\",\"sleep\":\"" + sleep +
+  String json = "{\"wake\":\"" + wake + "\",\"sleep\":\"" + sleep +
                 "\",\"goal\":" + String(goal) + ",\"satisfaction\":" + String(satisfaction) +
                 ",\"morningFeel\":\"" + morningFeel + "\",\"wakeCount\":" + String(wakeCount) +
                 ",\"quality\":" + String(quality) + "}";
+
   int code = http.POST(json);
+  String response = http.getString();
   http.end();
 
+  // JSON 파싱
+  StaticJsonDocument<1024> doc;
+  DeserializationError err = deserializeJson(doc, response);
+
+  if (!err) {
+    JsonObject plan = doc["light_plan"];
+    if (!plan.isNull()) {
+      int warm_pwm = plan["warm_pwm"] | 0;
+      int cool_pwm = plan["cool_pwm"] | 0;
+      applyLight(warm_pwm, cool_pwm);
+    }
+  } else {
+    Serial.println("⚠️ JSON 파싱 실패");
+  }
+
   server.send(200, "text/html; charset=utf-8",
-               "<h3>✅ 데이터 저장 완료!</h3><a href='/'>뒤로가기</a>");
+               "<h3>✅ 데이터 저장 & 조명 적용 완료!</h3><a href='/'>뒤로가기</a>");
 }
 
 // =========================
@@ -213,6 +228,8 @@ void handleSave() {
 // =========================
 void setup() {
   Serial.begin(115200);
+  setupPWM();
+
   WiFiManager wm;
   wm.autoConnect("SleepTech_Setup");
 
@@ -222,7 +239,7 @@ void setup() {
   server.on("/save_init", handleSaveInit);
   server.begin();
 
-  Serial.println("✅ SleepTech Server Ready");
+  Serial.println("✅ SleepTech ESP32 Ready");
 }
 
 void loop() {
