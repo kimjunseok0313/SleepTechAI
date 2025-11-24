@@ -5,19 +5,21 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 
-
 WebServer server(80);
 Preferences prefs;
 
 // =========================
 // PWM 설정 (LED 제어용)
 // =========================
-const int PIN_WARM = 25;   // 2700K 채널
+const int PIN_WARM = 13;   // 2700K 채널
 const int PIN_COOL = 26;   // 6500K 채널
 const int CH_WARM = 0;
 const int CH_COOL = 1;
 const int PWM_FREQ = 5000;
 const int PWM_RES = 8;     // 0~255 PWM 해상도
+
+// 전원 상태 (추가)
+bool lightPower = true;
 
 void setupPWM() {
   ledcSetup(CH_WARM, PWM_FREQ, PWM_RES);
@@ -27,12 +29,25 @@ void setupPWM() {
 }
 
 void applyLight(int warm_pwm, int cool_pwm) {
+
+  // OFF 상태면 강제로 0 출력
+  if (!lightPower) {
+    warm_pwm = 0;
+    cool_pwm = 0;
+  }
+
   warm_pwm = constrain(warm_pwm, 0, 255);
   cool_pwm = constrain(cool_pwm, 0, 255);
+
   ledcWrite(CH_WARM, warm_pwm);
   ledcWrite(CH_COOL, cool_pwm);
-  Serial.printf("💡 조명 적용 → Warm:%d  Cool:%d\n", warm_pwm, cool_pwm);
+
+  Serial.printf("💡 조명 적용 → Power:%s | Warm:%d Cool:%d\n",
+                lightPower ? "ON" : "OFF",
+                warm_pwm, cool_pwm);
 }
+
+
 
 // =========================
 // HTML 페이지 (초기 설정)
@@ -87,13 +102,6 @@ String mainPage = R"rawliteral(
       input, select, textarea { width: 80%; max-width: 400px; padding: 5px; }
       button { font-size: 16px; margin-top: 10px; padding: 8px 20px; }
     </style>
-    <script>
-      function toggleMode(mode) {
-        const manual = document.getElementById('manualSection');
-        if (mode === 'manual') manual.classList.remove('hidden');
-        else manual.classList.add('hidden');
-      }
-    </script>
   </head>
 
   <body>
@@ -135,10 +143,16 @@ String mainPage = R"rawliteral(
     </form>
 
     <br>
+
+    <!-- 🔆 추가: 전원 토글 버튼 -->
+    <button onclick="location.href='/toggle'">💡 전원 ON/OFF</button>
+
+    <br><br>
     <a href='/init'><button>⚙ 초기 설정 페이지로 이동</button></a>
   </body>
 </html>
 )rawliteral";
+
 
 // =========================
 // 함수들
@@ -175,10 +189,12 @@ void handleSaveInit() {
 
   String json = "{\"name\":\"" + name + "\",\"age\":" + String(age) +
                 ",\"gender\":\"" + gender + "\",\"job\":\"" + job + "\"}";
-  int code = http.POST(json);
+
+  http.POST(json);
   http.end();
 
-  server.send(200, "text/html; charset=utf-8", "<h3>✅ 초기 설정 완료!</h3><a href='/'>메인으로</a>");
+  server.send(200, "text/html; charset=utf-8",
+               "<h3>✅ 초기 설정 완료!</h3><a href='/'>메인으로</a>");
 }
 
 void handleSave() {
@@ -195,10 +211,14 @@ void handleSave() {
   http.begin("https://sleeptech-server.onrender.com/save_pattern");
   http.addHeader("Content-Type", "application/json");
 
-  String json = "{\"wake\":\"" + wake + "\",\"sleep\":\"" + sleep +
-                "\",\"goal\":" + String(goal) + ",\"satisfaction\":" + String(satisfaction) +
-                ",\"morningFeel\":\"" + morningFeel + "\",\"wakeCount\":" + String(wakeCount) +
-                ",\"quality\":" + String(quality) + "}";
+  String json =
+      "{\"wake\":\"" + wake +
+      "\",\"sleep\":\"" + sleep +
+      "\",\"goal\":" + String(goal) +
+      ",\"satisfaction\":" + String(satisfaction) +
+      ",\"morningFeel\":\"" + morningFeel +
+      "\",\"wakeCount\":" + String(wakeCount) +
+      ",\"quality\":" + String(quality) + "}";
 
   int code = http.POST(json);
   String response = http.getString();
@@ -210,9 +230,16 @@ void handleSave() {
 
   if (!err) {
     JsonObject plan = doc["light_plan"];
+
     if (!plan.isNull()) {
+
+      // 플라스크에서 power 보내면 받아서 적용
+      bool power = plan["power"] | true;
+      lightPower = power;
+
       int warm_pwm = plan["warm_pwm"] | 0;
       int cool_pwm = plan["cool_pwm"] | 0;
+
       applyLight(warm_pwm, cool_pwm);
     }
   } else {
@@ -222,6 +249,25 @@ void handleSave() {
   server.send(200, "text/html; charset=utf-8",
                "<h3>✅ 데이터 저장 & 조명 적용 완료!</h3><a href='/'>뒤로가기</a>");
 }
+
+// =========================
+// 🔆 전원 토글 기능
+// =========================
+void handleToggle() {
+  lightPower = !lightPower;
+
+  if (!lightPower) {
+    applyLight(0, 0);
+  }
+
+  String msg = "<h3>전원: ";
+  msg += (lightPower ? "ON" : "OFF");
+  msg += "</h3><a href='/'>뒤로가기</a>";
+
+  server.send(200, "text/html; charset=utf-8", msg);
+}
+
+
 
 // =========================
 // SETUP / LOOP
@@ -235,10 +281,13 @@ void setup() {
 
   server.on("/", handleRoot);
   server.on("/save", handleSave);
-  server.on("/init", []() { server.send(200, "text/html; charset=utf-8", initPage); });
+  server.on("/toggle", handleToggle);
+  server.on("/init", []() {
+    server.send(200, "text/html; charset=utf-8", initPage);
+  });
   server.on("/save_init", handleSaveInit);
-  server.begin();
 
+  server.begin();
   Serial.println("✅ SleepTech ESP32 Ready");
 }
 

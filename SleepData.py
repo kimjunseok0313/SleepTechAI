@@ -17,14 +17,22 @@ SCOPE = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive"
 ]
-CREDS_FILE = "/etc/secrets/credentials.json"  # Render 시크릿 경로
+CREDS_FILE = "/etc/secrets/credentials.json"
 SHEET_ID = "1s5BKkultYwSUrEQxOajsWZvf64g0538kMKdii0WivTY"
 
-# ==============================
-# 💾 CSV 파일 설정
-# ==============================
 DATA_FILE = "user_patterns.csv"
 SLEEP_FILE = "sleep_data.csv"
+
+# ==============================
+# 🧠 ML 모델 로드
+# ==============================
+try:
+    ML_MODEL = joblib.load("/etc/secrets/sleep_quality_model.pkl")
+    print("✅ ML 모델 로드 완료")
+except:
+    ML_MODEL = None
+    print("⚠️ ML 모델 로드 실패 - 기본 규칙만 작동")
+
 
 # ==============================
 # ⚙️ 유틸 함수
@@ -35,6 +43,7 @@ def _last_row_as_dict(ws):
         return {}
     return vals[-1]
 
+
 def _hhmm_to_dt_today(hhmm: str):
     try:
         t = datetime.strptime(hhmm, "%H:%M").time()
@@ -43,14 +52,15 @@ def _hhmm_to_dt_today(hhmm: str):
     except:
         return None
 
+
 def to_dual_channel(brightness: int, cct_mode: str, blend_ratio: float = 0.5):
-    """밝기·색온도 비율 → 2700K·6500K 듀얼채널 PWM 변환"""
     brightness = max(0, min(100, int(brightness)))
+
     if cct_mode == "warm":
         warm_pct, cool_pct = 1.0, 0.0
     elif cct_mode == "cool":
         warm_pct, cool_pct = 0.0, 1.0
-    else:  # blend
+    else:
         blend_ratio = max(0.0, min(1.0, float(blend_ratio)))
         warm_pct = 1.0 - blend_ratio
         cool_pct = blend_ratio
@@ -58,22 +68,16 @@ def to_dual_channel(brightness: int, cct_mode: str, blend_ratio: float = 0.5):
     scale = brightness / 100.0
     warm_pwm = int(round(255 * warm_pct * scale))
     cool_pwm = int(round(255 * cool_pct * scale))
+
     return warm_pwm, cool_pwm
 
 
 # ==============================
-# 🧠 ML 모델 로드 (없으면 무시)
+# 🤖 ML 수면 품질 예측 함수
 # ==============================
-try:
-    ML_MODEL = joblib.load("sleep_quality_model.pkl")
-except:
-    ML_MODEL = None
-
-
 def predict_quality(init, pattern, sleep):
-    """남들 데이터로 학습된 모델을 참고해 수면 품질 예측값 반환"""
     if ML_MODEL is None:
-        return 6.0  # 기본값
+        return float(pattern.get("quality", 7))
 
     age = int(init.get("age", 25))
     goal = float(pattern.get("goal", 7))
@@ -82,18 +86,20 @@ def predict_quality(init, pattern, sleep):
 
     X = np.array([[age, 1, 3, goal, max(1, 6 - satisfaction),
                    3, 65, 6000, 2]])
+
     try:
         pred = float(ML_MODEL.predict(X)[0])
-        return pred
+        return max(1.0, min(10.0, pred))
     except:
-        return 6.0
+        return float(pattern.get("quality", 7))
 
 
 # ==============================
-# 💡 규칙 기반 개인화 조명 엔진
+# 💡 AI + 규칙 기반 조명 추천 엔진
 # ==============================
 def build_light_plan(init: dict, pattern: dict, sleep: dict):
     now = datetime.now()
+
     wake_dt = _hhmm_to_dt_today(pattern.get("wake", ""))
     sleep_dt = _hhmm_to_dt_today(pattern.get("sleep", ""))
 
@@ -102,58 +108,62 @@ def build_light_plan(init: dict, pattern: dict, sleep: dict):
     morningFeel = pattern.get("morningFeel", "보통")
     wakeCount = int(pattern.get("wakeCount", 0))
     last_quality = float(pattern.get("quality", 7))
-    ml_quality_pred = predict_quality(init, pattern, sleep)
+
+    ml_pred = predict_quality(init, pattern, sleep)
 
     # 기본값
     cct_mode = "blend"
-    blend_ratio = 0.5
+    blend_ratio = 0.6
     brightness = 60
     phase = "daytime"
 
-    # 시간대별 규칙
-    if wake_dt and now >= wake_dt and now <= (wake_dt + timedelta(minutes=90)):
-        cct_mode, blend_ratio, brightness, phase = "cool", 1.0, 90, "morning_boost"
-    elif sleep_dt and now >= (sleep_dt - timedelta(minutes=120)) and now <= sleep_dt:
-        minutes_to_sleep = max(0, int((sleep_dt - now).total_seconds() // 60))
-        brightness = int(15 + (minutes_to_sleep / 120.0) * (40 - 15))
-        brightness = max(15, min(40, brightness))
-        cct_mode, blend_ratio, phase = "warm", 0.0, "evening_winddown"
-    else:
-        cct_mode, blend_ratio, brightness, phase = "blend", 0.6, 65, "daytime"
+    # 아침 부스트
+    if wake_dt and wake_dt <= now <= (wake_dt + timedelta(minutes=90)):
+        cct_mode = "cool"
+        blend_ratio = 1.0
+        brightness = 90
+        phase = "morning_boost"
 
-    # 설문 기반 보정
-    if last_quality <= 5 or wakeCount >= 2 or satisfaction <= 5 or morningFeel == "나쁨":
+    # 취침 2시간 전
+    elif sleep_dt and (sleep_dt - timedelta(minutes=120)) <= now <= sleep_dt:
+        mins_to_sleep = max(0, int((sleep_dt - now).total_seconds() // 60))
+        brightness = int(15 + (mins_to_sleep / 120) * (40 - 15))
+        brightness = max(15, min(40, brightness))
+        cct_mode = "warm"
+        blend_ratio = 0.0
+        phase = "evening_winddown"
+
+    # 사용자 상태 보정
+    if last_quality <= 5 or wakeCount >= 2 or satisfaction <= 4 or morningFeel == "나쁨":
+        brightness = max(20, brightness - 10)
         if phase == "evening_winddown":
             brightness = max(10, brightness - 10)
-        if cct_mode == "blend":
-            blend_ratio = max(0.3, blend_ratio - 0.1)
-        brightness = max(30, brightness - 10)
+        blend_ratio = max(0.3, blend_ratio - 0.1)
 
     # ML 예측 기반 보정
-    if ml_quality_pred <= 6.0:
+    if ml_pred <= 6:
+        brightness = max(20, brightness - 5)
         if phase == "evening_winddown":
-            brightness = max(10, brightness - 5)
-            cct_mode, blend_ratio = "warm", 0.0
-        else:
-            brightness = max(35, brightness - 5)
+            cct_mode = "warm"
+            blend_ratio = 0.0
 
     warm_pwm, cool_pwm = to_dual_channel(brightness, cct_mode, blend_ratio)
 
     return {
+        "power": True,
         "phase": phase,
-        "mode": "AI-RULE",
+        "brightness_pct": brightness,
         "cct_mode": cct_mode,
         "blend_ratio": round(blend_ratio, 2),
-        "brightness_pct": brightness,
         "warm_pwm": warm_pwm,
         "cool_pwm": cool_pwm,
-        "ml_quality_pred": round(ml_quality_pred, 2),
+        "ml_pred": ml_pred,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
 
 
 # ==============================
-# 📍 초기설정 저장
+# 📍 초기 데이터 저장
 # ==============================
 @app.route("/save_init", methods=["POST"])
 def save_init():
@@ -164,6 +174,7 @@ def save_init():
         creds = ServiceAccountCredentials.from_json_keyfile_name(CREDS_FILE, SCOPE)
         client = gspread.authorize(creds)
         sheet = client.open_by_key(SHEET_ID).worksheet("InitData")
+
         sheet.append_row([data.get(k, "") for k in data.keys()])
 
         return jsonify({"status": "success", "message": "Init data saved"})
@@ -172,7 +183,7 @@ def save_init():
 
 
 # ==============================
-# 📊 수면 데이터 분석
+# 📊 Sleep 데이터 수집
 # ==============================
 @app.route("/analyze", methods=["GET"])
 def analyze():
@@ -182,24 +193,16 @@ def analyze():
         sheet = client.open_by_key(SHEET_ID).worksheet("PersonalSleep")
 
         data = sheet.get_all_records()
-        if not data:
-            return jsonify({"error": "No data found"}), 404
-
         df = pd.DataFrame(data)
-        df.to_csv(SLEEP_FILE, index=False, encoding="utf-8-sig")
+        df.to_csv(SLEEP_FILE, index=False)
 
-        return jsonify({
-            "message": "Sleep data fetched and saved successfully",
-            "rows": len(data),
-            "latest": data[-1]
-        })
-
+        return jsonify({"status": "success", "rows": len(data), "latest": data[-1]})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 # ==============================
-# 💤 생활패턴 저장 (ESP32 → Flask)
+# 💤 생활 패턴 저장 + AI 조명 추천
 # ==============================
 @app.route("/save_pattern", methods=["POST"])
 def save_pattern():
@@ -209,28 +212,27 @@ def save_pattern():
 
         df = pd.DataFrame([data])
         if not os.path.exists(DATA_FILE):
-            df.to_csv(DATA_FILE, index=False, encoding="utf-8-sig")
+            df.to_csv(DATA_FILE, index=False)
         else:
-            df.to_csv(DATA_FILE, mode="a", header=False, index=False, encoding="utf-8-sig")
+            df.to_csv(DATA_FILE, mode="a", header=False, index=False)
 
         creds = ServiceAccountCredentials.from_json_keyfile_name(CREDS_FILE, SCOPE)
         client = gspread.authorize(creds)
-        sheet = client.open_by_key(SHEET_ID).worksheet("Pattern")
-        headers = list(data.keys())
-        row = [data[k] for k in headers]
-        sheet.append_row(row)
-
-        # 🧠 추천 조명 계산
         ws_init = client.open_by_key(SHEET_ID).worksheet("InitData")
+        ws_pat = client.open_by_key(SHEET_ID).worksheet("Pattern")
         ws_sleep = client.open_by_key(SHEET_ID).worksheet("PersonalSleep")
+
+        headers = list(data.keys())
+        ws_pat.append_row([data[k] for k in headers])
+
         init = _last_row_as_dict(ws_init)
         sleep = _last_row_as_dict(ws_sleep)
+
         plan = build_light_plan(init, data, sleep)
 
         return jsonify({
             "status": "success",
             "message": "Pattern saved and light plan generated",
-            "data": data,
             "light_plan": plan
         })
 
@@ -239,23 +241,25 @@ def save_pattern():
 
 
 # ==============================
-# 🔆 실시간 조명 추천 요청 (ESP32가 GET)
+# 🔆 실시간 조명 요청(GET)
 # ==============================
 @app.route("/light_plan", methods=["GET"])
 def light_plan():
     try:
         creds = ServiceAccountCredentials.from_json_keyfile_name(CREDS_FILE, SCOPE)
         client = gspread.authorize(creds)
+
         ws_init = client.open_by_key(SHEET_ID).worksheet("InitData")
         ws_pat = client.open_by_key(SHEET_ID).worksheet("Pattern")
-        ws_slp = client.open_by_key(SHEET_ID).worksheet("PersonalSleep")
+        ws_sleep = client.open_by_key(SHEET_ID).worksheet("PersonalSleep")
 
         init = _last_row_as_dict(ws_init)
-        pattern = _last_row_as_dict(ws_pat)
-        sleep = _last_row_as_dict(ws_slp)
+        pat = _last_row_as_dict(ws_pat)
+        slp = _last_row_as_dict(ws_sleep)
 
-        plan = build_light_plan(init, pattern, sleep)
-        return jsonify({"status": "ok", "plan": plan})
+        plan = build_light_plan(init, pat, slp)
+
+        return jsonify({"status": "ok", "light_plan": plan})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
