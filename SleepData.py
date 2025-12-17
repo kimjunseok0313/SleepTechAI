@@ -107,6 +107,42 @@ def save_rule_to_sheet(rule_data: dict):
 # ==============================
 def build_light_plan(init: dict, pattern: dict, sleep: dict):
     now = datetime.now()
+    power = pattern.get("power", True)
+
+    if not power:
+        print("⛔ POWER OFF 요청 → PWM 강제 0")
+
+        rule_data = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "phase": "off",
+            "brightness_pct": 0,
+            "cct_mode": "off",
+            "blend_ratio": 0,
+            "warm_pwm": 0,
+            "cool_pwm": 0,
+            "ml_pred": 0,
+            "last_quality": pattern.get("quality", ""),
+            "wakeCount": pattern.get("wakeCount", ""),
+            "satisfaction": pattern.get("satisfaction", ""),
+            "morningFeel": pattern.get("morningFeel", "")
+        }
+
+        try:
+            save_rule_to_sheet(rule_data)
+        except Exception as e:
+            print("⚠️ Rule OFF 저장 실패:", e)
+
+        return {
+            "power": False,
+            "phase": "off",
+            "brightness_pct": 0,
+            "cct_mode": "off",
+            "blend_ratio": 0,
+            "warm_pwm": 0,
+            "cool_pwm": 0,
+            "ml_pred": 0,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
 
     wake_dt = _hhmm_to_dt_today(pattern.get("wake", ""))
     sleep_dt = _hhmm_to_dt_today(pattern.get("sleep", ""))
