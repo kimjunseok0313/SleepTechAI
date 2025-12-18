@@ -300,14 +300,14 @@ def toggle():
     data = request.get_json(force=True)
     power = data.get("power", True)
 
-    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDS_FILE, SCOPE)
-    client = gspread.authorize(creds)
-    ws_pat = client.open_by_key(SHEET_ID).worksheet("Pattern")
+    # 시트 접근 ❌ 제거
+    # 최소 패턴만 만들어서 조명 계산
+    pattern = {
+        "power": power
+    }
 
-    last = _last_row_as_dict(ws_pat)
-    last["power"] = power
-
-    plan = build_light_plan(last)
+    # init / sleep 없이도 OFF는 즉시 처리됨
+    plan = build_light_plan({}, pattern, {})
 
     return jsonify({
         "status": "success",
