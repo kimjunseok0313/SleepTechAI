@@ -27,7 +27,7 @@ SLEEP_FILE = "sleep_data.csv"
 # 🧠 ML 모델 로드
 # ==============================
 try:
-    ML_MODEL = joblib.load("/etc/secrets/sleep_quality_model.pkl")
+    ML_MODEL = joblib.load("sleep_quality_model.pkl")
     print("✅ ML 모델 로드 완료")
 except:
     ML_MODEL = None
@@ -255,7 +255,8 @@ def save_pattern():
         ws_pat = client.open_by_key(SHEET_ID).worksheet("Pattern")
         ws_sleep = client.open_by_key(SHEET_ID).worksheet("PersonalSleep")
 
-        ws_pat.append_row([data[k] for k in data.keys()])
+        header = ws_pat.row_values(1)
+        ws_pat.append_row([data.get(k, "") for k in header])
 
         init = _last_row_as_dict(ws_init)
         sleep = _last_row_as_dict(ws_sleep)
@@ -294,6 +295,27 @@ def light_plan():
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+@app.route("/toggle", methods=["POST"])
+def toggle():
+    data = request.get_json(force=True)
+    power = data.get("power", True)
+
+    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDS_FILE, SCOPE)
+    client = gspread.authorize(creds)
+    ws_pat = client.open_by_key(SHEET_ID).worksheet("Pattern")
+
+    last = _last_row_as_dict(ws_pat)
+    last["power"] = power
+
+    plan = build_light_plan(last)
+
+    return jsonify({
+        "status": "success",
+        "light_plan": plan
+    })
+
+    
+
 
 # ==============================
 # 🚀 서버 실행
